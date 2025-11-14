@@ -381,8 +381,39 @@ def process_test_case(row):
             result['multi_func_error'] = str(e)
             print(f"ID {test_id}: 多功能部署优化出错: {str(e)}")
             traceback.print_exc()
+       
+        #2.分层图最短路部署优化
+        try:
+            print(f"ID {test_id}: 开始分层图最短路部署优化...")
+            sp_optimizer = ShortestPathOptimizer(test_data)
+            sp_result = sp_optimizer.shortest_path_deployment()
 
-        # 2. 单功能部署优化
+            if sp_result:
+                # 8 元组：(total_cost, total_deploy_cost, total_comm_cost,
+                #        total_profit, total_users, used_nodes_count,
+                #        avg_modules_per_node, chain_count)
+                result['sp_cost'] = sp_result[0]
+                result['sp_deploy_cost'] = sp_result[1]
+                result['sp_comm_cost'] = sp_result[2]
+                result['sp_profit'] = sp_result[3]
+                result['sp_users'] = sp_result[4]
+                result['sp_nodes'] = sp_result[5]
+                result['sp_avg_modules'] = sp_result[6]
+                result['sp_chain_count'] = sp_result[7]
+
+                print(
+                    f"ID {test_id}: 分层图最短路部署完成，"
+                    f"总用户数: {sp_result[4]}, 总利润: {sp_result[3]}, "
+                    f"部署链条数: {sp_result[7]}"
+                )
+            else:
+                result['sp_error'] = "无法找到任何可行的最短路部署方案"
+                print(f"ID {test_id}: 分层图最短路部署失败，无可行方案")
+        except Exception as e:
+            result['sp_error'] = str(e)
+            print(f"ID {test_id}: 分层图最短路部署出错: {str(e)}")
+
+        # 3. 单功能部署优化
         try:
             print(f"ID {test_id}: 开始单功能部署优化...")
             single_optimizer = SingleFunctionOptimizer(test_data)
