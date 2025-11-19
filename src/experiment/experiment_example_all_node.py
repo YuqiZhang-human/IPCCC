@@ -338,25 +338,27 @@ def process_test_case(row):
             sp_optimizer = ShortestPathOptimizer(test_data)
             sp_result = sp_optimizer.shortest_path_deployment()
 
-            if sp_result:
-                # 8 元组：(total_cost, total_deploy_cost, total_comm_cost,
-                #        total_profit, total_users, used_nodes_count,
-                #        avg_modules_per_node, chain_count)
-                result['sp_cost'] = sp_result[0]
-                result['sp_deploy_cost'] = sp_result[1]
-                result['sp_comm_cost'] = sp_result[2]
-                result['sp_profit'] = sp_result[3]
-                result['sp_users'] = sp_result[4]
-                result['sp_nodes'] = sp_result[5]
-                result['sp_avg_modules'] = sp_result[6]
-                result['sp_chain_count'] = sp_result[7]
+            if sp_result is not None:
+                # 成功：sp_result 是一个 dict
+                # 先显式清空错误字段
+                result['sp_error'] = ""
+
+                result['sp_cost'] = sp_result["total_cost"]
+                result['sp_deploy_cost'] = sp_result["total_deploy_cost"]
+                result['sp_comm_cost'] = sp_result["total_comm_cost"]
+                result['sp_profit'] = sp_result["total_profit"]
+                result['sp_users'] = sp_result["total_users"]
+                result['sp_nodes'] = sp_result["used_nodes"]
+                result['sp_avg_modules'] = sp_result["avg_modules_per_node"]
+                result['sp_chain_count'] = sp_result["chain_count"]
 
                 print(
                     f"ID {test_id}: 分层图最短路部署完成，"
-                    f"总用户数: {sp_result[4]}, 总利润: {sp_result[3]}, "
-                    f"部署链条数: {sp_result[7]}"
+                    f"总用户数: {sp_result['total_users']}, 总利润: {sp_result['total_profit']}, "
+                    f"部署链条数: {sp_result['chain_count']}"
                 )
             else:
+                # 无可行方案
                 result['sp_error'] = "无法找到任何可行的最短路部署方案"
                 print(f"ID {test_id}: 分层图最短路部署失败，无可行方案")
         except Exception as e:
