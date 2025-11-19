@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple
 class ShortestPathOptimizer:
     """基于分层图最短路的部署优化器（多链 + 节点可复用）"""
 
-    def __init__(self, test_data: Dict[str, Any]) -> None:
+    def __init__(self, test_data: Dict[str, Any]):
         """
         Args:
             test_data: 由 test_experiment1.py 构造的字典，主要字段包括：
