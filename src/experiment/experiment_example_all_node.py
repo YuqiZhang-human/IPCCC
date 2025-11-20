@@ -9,7 +9,7 @@
 2. 将每一行（一个测试配置）转换为优化器需要的 test_data 字典；
 3. 调用：
     - MultiFunctionOptimizer.optimize_for_profit()  （多功能多链部署）
-    - SingleFunctionOptimizer.single_func_deployment()（单功能多链部署）
+    - SingleFunctionOptimizer.single_func_deployment()（单功能多链部署，节点不重复）
 4. 收集结果，输出为一个汇总 CSV 并支持断点续跑。
 
 注意：
@@ -48,7 +48,7 @@ os.makedirs(output_dir, exist_ok=True)
 
 # 导入优化器
 from algorithm.multi_all_node import MultiFunctionOptimizer
-from algorithm.single_all_node import SingleFunctionOptimizer
+from algorithm.single_all_node_multi import SingleFunctionOptimizer
 from algorithm.shortest_path_all_node import ShortestPathOptimizer
 
 # ----------------------------------------------------------------------
