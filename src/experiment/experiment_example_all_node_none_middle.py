@@ -149,7 +149,7 @@ def build_test_data_from_row(row):
 
     # 7. 利润 / 成本参数
     profit_per_user = user_price_per_month
-    gpu_cost = 0.0
+    gpu_cost = 0.0 # TFLOPS
     memory_cost = (
         sum(cost[1] for cost in node_costs) / len(node_costs)
         if node_costs else 0.0
@@ -196,7 +196,6 @@ def build_test_data_from_row(row):
         "resource_demands": resource_demands,
         "data_sizes": data_sizes,
         "bandwidth_matrix": bandwidth_matrix,
-        "gpu_cost": gpu_cost,
         "memory_cost": memory_cost,
         "bandwidth_cost": bandwidth_cost,
         "profit_per_user": profit_per_user,
@@ -231,7 +230,7 @@ def process_test_case(row):
         f"bandwidth={test_data.get('bandwidth', 0)}, "
         f"model_size={test_data.get('model_size', 0)}, "
         f"topology_degree={test_data.get('topology_degree', 0)}, "
-        f"gpu_cost={test_data.get('gpu_cost', 0)}"
+        f"memory_cost={test_data.get('memory_cost', 0)}"
     )
 
     # 初始化结果字典（先写一些基础参数）
@@ -290,6 +289,11 @@ def process_test_case(row):
                     result['multi_func_profit_nodes'] = max_profit_plan[5]
                     result['multi_func_profit_avg_modules'] = max_profit_plan[6]
                     result['multi_func_profit_chain_count'] = max_profit_plan[7]
+                    print(
+                        f"ID {test_id}: 多功能部署优化完成（最大利润策略），"
+                        f"总用户数: {max_profit_plan[4]}, 总利润: {max_profit_plan[3]}, "
+                        f"部署链条数: {max_profit_plan[7]}"
+                    )
                 else:
                     result['multi_func_profit_error'] = "无可行方案"
 
@@ -303,6 +307,11 @@ def process_test_case(row):
                     result['multi_func_worst_profit_nodes'] = min_profit_plan[5]
                     result['multi_func_worst_profit_avg_modules'] = min_profit_plan[6]
                     result['multi_func_worst_profit_chain_count'] = min_profit_plan[7]
+                    print(
+                        f"ID {test_id}: 多功能部署优化完成（最大用户策略），"
+                        f"总用户数: {min_profit_plan[4]}, 总利润: {max_profit_plan[3]}, "
+                        f"部署链条数: {min_profit_plan[7]}"
+                    )
                 else:
                     result['multi_func_worst_profit_error'] = "无可行方案"
 

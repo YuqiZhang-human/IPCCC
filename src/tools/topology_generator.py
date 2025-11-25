@@ -62,7 +62,7 @@ CONFIG = {
 
     # ---- 网状网络参数 ----
     "mesh": {
-        "node_count": 20,
+        "node_count": 12,
         "min_degree": 3            # 要求每个节点度数 ≥ min_degree（需 < node_count）
     }
 }
