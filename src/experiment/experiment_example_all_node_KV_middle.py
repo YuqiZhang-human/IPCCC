@@ -3,6 +3,8 @@
 
 """
 多线程并行版实验1测试（适配新版多链部署优化器）
+[有中间变量结果存储]
+[修改为兼容新权重KV版本]
 
 功能：
 1. 读取 experiment1_data_generator_new.py 生成的 CSV 测试数据；
@@ -47,9 +49,9 @@ output_dir = os.path.join(project_root, 'data', 'analysis', 'table')
 os.makedirs(output_dir, exist_ok=True)
 
 # 导入优化器
-from algorithm.multi_all_node import MultiFunctionOptimizer
-from algorithm.single_all_node_multi import SingleFunctionOptimizer
-from algorithm.shortest_path_all_node import ShortestPathOptimizer
+from algorithm.all_node_KV_optimizer.multi_all_node_KV_optimizer import MultiFunctionOptimizer
+from algorithm.all_node_KV_optimizer.single_all_node_KV_optimizer import SingleFunctionOptimizer
+from algorithm.all_node_KV_optimizer.shortest_path_all_node_KV_optimizer import ShortestPathOptimizer
 
 # ----------------------------------------------------------------------
 # 将一行 CSV 数据转换为优化器使用的 test_data 字典
@@ -84,6 +86,9 @@ def build_test_data_from_row(row):
     segments_layers = json.loads(row['segments_layers_json'])
     segments_detail = json.loads(row['segments_detail_json'])
     segments_summary = json.loads(row['segments_summary_json'])
+    total_weights_gb = float(segments_summary.get("total_weights_gb", 0.0))
+    total_kv_gb = float(segments_summary.get("total_kv_gb", 0.0))  # 单用户整条链 KV 显存
+
 
     module_count = len(segments_detail)
 
@@ -113,26 +118,39 @@ def build_test_data_from_row(row):
     avg_compute_ability = total_compute_cap / node_count if node_count > 0 else 0.0
     avg_memory_ability = total_mem_cap / node_count if node_count > 0 else 0.0
 
-    # 4. 模块资源需求（resource_demands）+ 边界数据速率（data_sizes）
+    # 4. 模块资源需求（resource_demands）+ 权重显存 + 边界数据速率（data_sizes）
+    #    - resource_demands[m] = [compute_per_user, kv_mem_per_user]
+    #    - weight_memory_demands[m] = weight_mem_gb
     resource_demands = []
+    weight_memory_demands = []
     data_sizes = []
 
     for idx, seg in enumerate(segments_detail):
-        # 算力需求（TFLOPs/s per user）
+        # 4.1 算力需求（TFLOPs/s per user）
         comp_tok = float(seg.get('compute_tflops_per_token', 0.0))
         comp_user = seg.get('compute_tflops_per_user_per_sec', None)
         if comp_user is None:
             comp_user = seg.get('compute_tflops_per_user', None)
         if comp_user is None:
-            comp_user = comp_tok * tokens_per_user  # 兜底：按 token/sec 线性扩展
+            # 兜底：按 token/sec 线性扩展
+            comp_user = comp_tok * tokens_per_user
         comp_user = float(comp_user)
 
-        # 显存需求（GB）
-        mem_gb = float(seg.get('memory_gb', 0.0))
+        # 4.2 per-user KV 显存（GB）
+        # 优先使用新字段 kv_gb；如果旧数据没有，则退回 memory_gb，保证兼容性
+        kv_gb = seg.get('kv_gb', None)
+        if kv_gb is None:
+            kv_gb = seg.get('memory_gb', 0.0)
+        kv_gb = float(kv_gb)
 
-        resource_demands.append([comp_user, mem_gb])
+        # 4.3 权重显存（GB）
+        # 优先使用新字段 weights_gb；旧数据没有时默认为 0（等价于“不计权重”）
+        w_gb = float(seg.get('weights_gb', 0.0))
 
-        # 边界数据：MB/s per user（最后一个模块之后没有边界）
+        resource_demands.append([comp_user, kv_gb])
+        weight_memory_demands.append(w_gb)
+
+        # 4.4 边界数据：MB/s per user（最后一个模块之后没有边界）
         if idx < module_count - 1:
             boundary_mb = float(seg.get('boundary_data_mb', 0.0))
             data_sizes.append(boundary_mb)
@@ -194,6 +212,7 @@ def build_test_data_from_row(row):
         "module_count": module_count,
         "computation_capacity": computation_capacity,
         "resource_demands": resource_demands,
+        "weight_memory_demands": weight_memory_demands,
         "data_sizes": data_sizes,
         "bandwidth_matrix": bandwidth_matrix,
         "gpu_cost": gpu_cost,
@@ -205,6 +224,10 @@ def build_test_data_from_row(row):
 
         # 新增：完整拓扑矩阵，供中间变量分析使用
         "adjacency_matrix": adjacency,
+        # 新增：全局显存规模（权重 + 单用户 KV）
+        "total_weights_gb": total_weights_gb,
+        "kv_per_user_gb": total_kv_gb,
+
     }
 
     return test_data
@@ -324,6 +347,21 @@ def process_test_case(row):
             total_compute_capacity = float(np.sum(cap_arr[:, 0]))
             total_memory_capacity = float(np.sum(cap_arr[:, 1]))
 
+     # 7) 显存语义重定义：
+    # total_weights_gb：一份模型权重显存（与用户数无关）
+    # kv_per_user_gb ：单用户整条链 KV 显存（随用户数线性增长）
+    total_weights_gb = float(test_data.get("total_weights_gb", 0.0))
+
+    # 优先使用 test_data 里的 kv_per_user_gb；否则退回到 total_memory_demand
+    kv_per_user_gb = float(test_data.get("kv_per_user_gb", 0.0))
+    if kv_per_user_gb <= 0.0 and total_memory_demand > 0.0:
+        kv_per_user_gb = total_memory_demand
+
+    # 为了避免歧义，这里让 total_memory_demand 明确等于“单用户 KV 总显存”
+    total_memory_demand = kv_per_user_gb
+
+
+
     # 初始化结果字典（先写基础 + 中间变量）
     result = {
         'test_data_id': test_id,
@@ -362,9 +400,11 @@ def process_test_case(row):
 
         # 新增：全局供需规模（方便后续归一化/回归）
         'global_compute_per_user': global_compute_per_user,
-        'total_memory_demand': total_memory_demand,
+        'total_memory_demand': total_memory_demand,   # 现在语义 = kv_per_user_gb
         'total_compute_capacity': total_compute_capacity,
         'total_memory_capacity': total_memory_capacity,
+        'total_weights_gb': total_weights_gb,
+        'kv_per_user_gb': kv_per_user_gb,
     }
 
     try:
@@ -438,12 +478,12 @@ def process_test_case(row):
                         result['multi_func_profit_compute_util'] = 0.0
 
                     # 全局显存利用率： (链条数 * 单链显存需求 / 总显存容量)
-                    if total_memory_capacity > 0 and total_memory_demand > 0:
-                        result['multi_func_profit_memory_util'] = (
-                            total_memory_demand * mf_profit_chain_count
-                        ) / total_memory_capacity
+                    if total_memory_capacity > 0 and kv_per_user_gb > 0:
+                        mem_used = total_weights_gb + kv_per_user_gb * mf_profit_total_users
+                        result['multi_func_profit_memory_util'] = mem_used / total_memory_capacity
                     else:
                         result['multi_func_profit_memory_util'] = 0.0
+
 
                 else:
                     result['multi_func_profit_error'] = "无可行方案"
@@ -507,12 +547,12 @@ def process_test_case(row):
                         result['multi_func_max_users_compute_util'] = 0.0
 
                     # 全局显存利用率
-                    if total_memory_capacity > 0 and total_memory_demand > 0:
-                        result['multi_func_max_users_memory_util'] = (
-                            total_memory_demand * mf_users_chain_count
-                        ) / total_memory_capacity
+                    if total_memory_capacity > 0 and kv_per_user_gb > 0:
+                        mem_used = total_weights_gb + kv_per_user_gb * mf_users_total_users
+                        result['multi_func_max_users_memory_util'] = mem_used / total_memory_capacity
                     else:
                         result['multi_func_max_users_memory_util'] = 0.0
+
 
                 else:
                     result['multi_func_max_users_error'] = "无可行方案"
@@ -569,12 +609,12 @@ def process_test_case(row):
                 else:
                     result['sp_compute_util'] = 0.0
 
-                if total_memory_capacity > 0 and total_memory_demand > 0:
-                    result['sp_memory_util'] = (
-                        total_memory_demand * sp_chain_count
-                    ) / total_memory_capacity
+                if total_memory_capacity > 0 and kv_per_user_gb > 0:
+                    mem_used = total_weights_gb + kv_per_user_gb * sp_total_users
+                    result['sp_memory_util'] = mem_used / total_memory_capacity
                 else:
                     result['sp_memory_util'] = 0.0
+
 
             else:
                 # 无可行方案
@@ -628,12 +668,12 @@ def process_test_case(row):
                 else:
                     result['single_func_compute_util'] = 0.0
 
-                if total_memory_capacity > 0 and total_memory_demand > 0:
-                    result['single_func_memory_util'] = (
-                        total_memory_demand * sf_chain_count
-                    ) / total_memory_capacity
+                if total_memory_capacity > 0 and kv_per_user_gb > 0:
+                    mem_used = total_weights_gb + kv_per_user_gb * sf_total_users
+                    result['single_func_memory_util'] = mem_used / total_memory_capacity
                 else:
                     result['single_func_memory_util'] = 0.0
+
 
             else:
                 result['single_func_error'] = "无法找到有效的单功能部署方案"
@@ -866,6 +906,8 @@ def main():
         profit_columns = [
             'multi_func_profit_profit',
             'multi_func_max_users_profit',
+            'multi_func_min_cost_profit',
+
             'single_func_profit'
         ]
 

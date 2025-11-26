@@ -43,10 +43,11 @@ import pandas as pd
 # 一、全局配置区（所有需要手动调的参数都放这里）
 # ============================================================
 
+
 # 1. 输出路径与批次设置
-OUTPUT_DIR = "E:\\JetBrains\\PyCharm\\IPCCC_journal\\IPCCC\\data\\test_data\\tiny_test"      # 所有输出的根目录
+OUTPUT_DIR = "..\\..\\..\\data\\test_data\\tiny_test"      # 所有输出的根目录
 BATCH_SIZE = 50                       # 每多少条记录写一个批次文件
-FINAL_CSV_NAME = "experiment1_tiny_N12_D3_K2-6.csv"  # 合并后的总表名
+FINAL_CSV_NAME = "experiment1_tiny_N12_D3_K2-5_KV.csv"  # 合并后的总表名
 
 # 2. 拓扑库（已有拓扑，非随机、可复现）
 #    当前示例：ny20_deg5（12个节点，平均度数约3），可以在这里再加别的拓扑。
@@ -161,7 +162,7 @@ GENERATION_CONFIG: Dict[str, Any] = {
     "G": 10,
 
     # （4）切分子模块数 K（参与全排列）
-    "K_list": [2, 3, 4, 5, 6],
+    "K_list": [2, 3, 4, 5],
 
     # （5）链路带宽（固定一个，减少组合）
     "link_bandwidth_gbps_list": [100.0],
@@ -449,6 +450,12 @@ def estimate_partition_resources(
             "compute_tflops_per_token": float(round(compute_tflops_per_token, 6)),
             "compute_tflops_per_user_per_sec": float(round(compute_tflops_per_token * tokens_per_user, 6)),
             "memory_gb": float(round(memory_gb, 6)),
+
+             # - weights_gb：该段模型权重显存（一次加载，多链复用）
+            # - kv_gb：该段单用户的 KV 显存（per user，后面按 users 线性放大）
+            "weights_gb": float(round(weights_gb_i, 6)),
+            "kv_gb": float(round(kv_gb_i, 6)),  #per user 的 KV 显存
+
             # 含义：单用户在该边界的流量速率（MB/s）
             "boundary_data_mb": float(round(boundary_mb, 6)),
         })
@@ -456,6 +463,8 @@ def estimate_partition_resources(
     summary = {
         "total_compute_tflops_per_token": float(round(sum(s["compute_tflops_per_token"] for s in segments), 6)),
         "total_memory_gb": float(round(sum(s["memory_gb"] for s in segments), 6)),
+        "total_weights_gb": float(round(sum(s["weights_gb"] for s in segments), 6)),
+        "total_kv_gb": float(round(sum(s["kv_gb"] for s in segments), 6)),
         "max_boundary_data_mb": float(round(max(s["boundary_data_mb"] for s in segments), 6)),
     }
 
