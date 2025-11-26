@@ -400,7 +400,7 @@ def process_test_case(row):
 
         # 新增：全局供需规模（方便后续归一化/回归）
         'global_compute_per_user': global_compute_per_user,
-        'total_memory_demand': total_memory_demand,   # 现在语义 = kv_per_user_gb
+        # 'total_memory_demand': total_memory_demand,   # 现在语义 = kv_per_user_gb
         'total_compute_capacity': total_compute_capacity,
         'total_memory_capacity': total_memory_capacity,
         'total_weights_gb': total_weights_gb,

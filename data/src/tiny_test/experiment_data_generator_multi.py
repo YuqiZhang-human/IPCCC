@@ -47,7 +47,7 @@ import pandas as pd
 # 1. 输出路径与批次设置
 OUTPUT_DIR = "..\\..\\..\\data\\test_data\\tiny_test"      # 所有输出的根目录
 BATCH_SIZE = 50                       # 每多少条记录写一个批次文件
-FINAL_CSV_NAME = "experiment1_tiny_N12_D3_K2-5_KV.csv"  # 合并后的总表名
+FINAL_CSV_NAME = "experiment1_tiny_Llama-3.1-13B_N12_D3_K2-5_KV.csv"  # 合并后的总表名
 
 # 2. 拓扑库（已有拓扑，非随机、可复现）
 #    当前示例：ny20_deg5（12个节点，平均度数约3），可以在这里再加别的拓扑。
@@ -156,13 +156,13 @@ GENERATION_CONFIG: Dict[str, Any] = {
     "topology_names": ["mesh12_deg3"],
 
     # （2）模型名称（不参与全排列）
-    "model_name": "Qwen2.5-7B",
+    "model_name": "Llama-3.1-13B",
 
     # （3）聚合组数 G
     "G": 10,
 
     # （4）切分子模块数 K（参与全排列）
-    "K_list": [2, 3, 4, 5],
+    "K_list": [2, 3, 4, 5, 6],
 
     # （5）链路带宽（固定一个，减少组合）
     "link_bandwidth_gbps_list": [100.0],
