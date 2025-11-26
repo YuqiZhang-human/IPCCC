@@ -44,8 +44,8 @@ import pandas as pd
 # ============================================================
 
 # 1. 输出路径与批次设置
-OUTPUT_DIR = "data\\test_data"      # 所有输出的根目录
-BATCH_SIZE = 5000                       # 每多少条记录写一个批次文件
+OUTPUT_DIR = "E:\\JetBrains\\PyCharm\\IPCCC_journal\\IPCCC\\data\\test_data\\tiny_test"      # 所有输出的根目录
+BATCH_SIZE = 50                       # 每多少条记录写一个批次文件
 FINAL_CSV_NAME = "experiment1_tiny_N12_D3_K2-6.csv"  # 合并后的总表名
 
 # 2. 拓扑库（已有拓扑，非随机、可复现）
@@ -83,13 +83,13 @@ GPU_CATALOG: Dict[str, Dict[str, Any]] = {
         "name": "H100-SXM",
         "G_TFLOPS": 1979.0,
         "VRAM_bytes": int(80 * 1024**3),
-        "cost_per_GB_month": 12.50,
+        "cost_per_GB_month": 1.250,
     },
     "A100-80G": {
         "name": "A100-80G",
         "G_TFLOPS": 312.0,
         "VRAM_bytes": int(80 * 1024**3),
-        "cost_per_GB_month": 8.50,
+        "cost_per_GB_month": 0.850,
     },
     "L4": {
         "name": "L4",
@@ -155,7 +155,7 @@ GENERATION_CONFIG: Dict[str, Any] = {
     "topology_names": ["mesh12_deg3"],
 
     # （2）模型名称（不参与全排列）
-    "model_name": "Llama-3.1-13B",
+    "model_name": "Qwen2.5-7B",
 
     # （3）聚合组数 G
     "G": 10,
@@ -164,10 +164,10 @@ GENERATION_CONFIG: Dict[str, Any] = {
     "K_list": [2, 3, 4, 5, 6],
 
     # （5）链路带宽（固定一个，减少组合）
-    "link_bandwidth_gbps_list": [10.0],
+    "link_bandwidth_gbps_list": [100.0],
 
     # （6）链路带宽价格（固定一个）
-    "link_price_per_gbps_month_list": [2.0],
+    "link_price_per_gbps_month_list": [0.5],
 
     # （7）GPU 型号集合（固定一组：A100 + H100）
     "gpu_set_list": [
@@ -175,7 +175,7 @@ GENERATION_CONFIG: Dict[str, Any] = {
     ],
 
     # （8）GPU 分配策略（参与全排列） → 2 种
-    "gpu_map_mode_list": ["high_to_high", "high_to_low"],
+    "gpu_map_mode_list": ["high_to_high"],
 
     # （9）用户套餐（固定一个）
     "pricing_profiles": [

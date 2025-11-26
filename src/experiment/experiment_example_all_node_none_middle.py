@@ -276,6 +276,11 @@ def process_test_case(row):
                     result['multi_func_min_cost_nodes'] = min_cost_plan[5]
                     result['multi_func_min_cost_avg_modules'] = min_cost_plan[6]
                     result['multi_func_min_cost_chain_count'] = min_cost_plan[7]
+                    print(
+                        f"ID {test_id}: 多功能部署优化完成（最大利润策略），"
+                        f"总用户数: {min_cost_plan[4]}, 总利润: {min_cost_plan[3]}, "
+                        f"部署链条数: {min_cost_plan[7]}"
+                    )
                 else:
                     result['multi_func_min_cost_error'] = "无可行方案"
 
@@ -308,7 +313,7 @@ def process_test_case(row):
                     result['multi_func_worst_profit_avg_modules'] = min_profit_plan[6]
                     result['multi_func_worst_profit_chain_count'] = min_profit_plan[7]
                     print(
-                        f"ID {test_id}: 多功能部署优化完成（最大用户策略），"
+                        f"ID {test_id}: 多功能部署优化完成（最低利润策略），"
                         f"总用户数: {min_profit_plan[4]}, 总利润: {max_profit_plan[3]}, "
                         f"部署链条数: {min_profit_plan[7]}"
                     )

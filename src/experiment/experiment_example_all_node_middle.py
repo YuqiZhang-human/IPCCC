@@ -48,7 +48,7 @@ os.makedirs(output_dir, exist_ok=True)
 
 # 导入优化器
 from algorithm.multi_all_node import MultiFunctionOptimizer
-from algorithm.single_all_node import SingleFunctionOptimizer
+from algorithm.single_all_node_multi import SingleFunctionOptimizer
 from algorithm.shortest_path_all_node import ShortestPathOptimizer
 
 # ----------------------------------------------------------------------
@@ -234,7 +234,7 @@ def process_test_case(row):
         f"bandwidth={test_data.get('bandwidth', 0)}, "
         f"model_size={test_data.get('model_size', 0)}, "
         f"topology_degree={test_data.get('topology_degree', 0)}, "
-        f"gpu_cost={test_data.get('gpu_cost', 0)}"
+        f"memory_cost={test_data.get('memory_cost', 0)}"
     )
 
     # ---------------- 先基于 test_data 计算“可分析的中间变量” ----------------
@@ -409,6 +409,12 @@ def process_test_case(row):
                     result['multi_func_profit_avg_modules'] = max_profit_plan[6]
                     result['multi_func_profit_chain_count'] = max_profit_plan[7]
 
+                    print(
+                        f"ID {test_id}: 多功能部署优化完成（最大利润策略），"
+                        f"总用户数: {max_profit_plan[4]}, 总利润: {max_profit_plan[3]}, "
+                        f"部署链条数: {max_profit_plan[7]}"
+                    )
+
                     # --- 派生：平均每条链用户数 / 平均每条链节点数 / 全局利用率 ---
                     mf_profit_total_users = max_profit_plan[4]
                     mf_profit_used_nodes = max_profit_plan[5]
@@ -452,6 +458,13 @@ def process_test_case(row):
                     result['multi_func_worst_profit_nodes'] = min_profit_plan[5]
                     result['multi_func_worst_profit_avg_modules'] = min_profit_plan[6]
                     result['multi_func_worst_profit_chain_count'] = min_profit_plan[7]
+
+                    print(
+                        f"ID {test_id}: 多功能部署优化完成（最小利润策略），"
+                        f"总用户数: {min_profit_plan[4]}, 总利润: {min_profit_plan[3]}, "
+                        f"部署链条数: {min_profit_plan[7]}"
+                    )
+
                 else:
                     result['multi_func_worst_profit_error'] = "无可行方案"
 
@@ -465,6 +478,7 @@ def process_test_case(row):
                     result['multi_func_max_users_nodes'] = max_users_plan[5]
                     result['multi_func_max_users_avg_modules'] = max_users_plan[6]
                     result['multi_func_max_users_chain_count'] = max_users_plan[7]
+
                     print(
                         f"ID {test_id}: 多功能部署优化完成（最大用户策略），"
                         f"总用户数: {max_users_plan[4]}, 总利润: {max_users_plan[3]}, "
@@ -677,7 +691,7 @@ def main():
     parser.add_argument('--limit', type=int, default=None, help='限制处理的数据条数（用于调试）')
     parser.add_argument('--output', type=str, default='experiment1_results_parallel_{input_name}.csv',
                         help='输出文件名模式，使用{input_name}表示输入文件名（不含扩展名）')
-    parser.add_argument('--batch_size', type=int, default=500, help='批处理大小（每处理多少条保存一次）')
+    parser.add_argument('--batch_size', type=int, default=50, help='批处理大小（每处理多少条保存一次）')
     parser.add_argument('--input', type=str, default='experiment1_all.csv',
                         help='输入文件名或路径（默认 data/test_data/experiment1_all.csv ）')
     parser.add_argument('--input_dir', type=str, default=None,
