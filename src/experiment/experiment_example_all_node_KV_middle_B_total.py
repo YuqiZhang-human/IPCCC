@@ -5,6 +5,7 @@
 多线程并行版实验1测试（适配新版多链部署优化器）
 [有中间变量结果存储]
 [修改为兼容新权重KV版本]
+##[修改为全局固定总带宽版本]
 
 功能：
 1. 读取 experiment1_data_generator_new.py 生成的 CSV 测试数据；
@@ -49,9 +50,9 @@ output_dir = os.path.join(project_root, 'data', 'analysis', 'table')
 os.makedirs(output_dir, exist_ok=True)
 
 # 导入优化器
-from algorithm.all_node_KV_optimizer.multi_all_node_KV_optimizer import MultiFunctionOptimizer
-from algorithm.all_node_KV_optimizer.single_all_node_KV_optimizer import SingleFunctionOptimizer
-from algorithm.all_node_KV_optimizer.shortest_path_all_node_KV_optimizer import ShortestPathOptimizer
+from src.algorithm.all_node_KV_optimizer.multi_all_node_KV_optimizer import MultiFunctionOptimizer
+from src.algorithm.all_node_KV_optimizer.single_all_node_KV_optimizer import SingleFunctionOptimizer
+from src.algorithm.all_node_KV_optimizer.shortest_path_all_node_KV_optimizer import ShortestPathOptimizer
 
 # ----------------------------------------------------------------------
 # 将一行 CSV 数据转换为优化器使用的 test_data 字典
@@ -74,7 +75,8 @@ def build_test_data_from_row(row):
     test_id = int(row.get('test_data_id', 0))
     node_count = int(row['node_count'])
     tokens_per_user = float(row['tokens_per_user'])
-    link_bandwidth_gbps = float(row['link_bandwidth_gbps'])
+    network_total_bandwidth_gbps = float(row['network_total_bandwidth_gbps'])
+    network_bandwidth_cost_per_month = float(row['network_bandwidth_cost_per_month'])
     link_price_per_gbps_month = float(row['link_price_per_gbps_month'])
     user_price_per_month = float(row['user_price_per_month'])
 
@@ -82,15 +84,26 @@ def build_test_data_from_row(row):
     adjacency = json.loads(row['adjacency_json'])
     distance = json.loads(row['distance_json'])
     bandwidth_gbps_matrix = json.loads(row['bandwidth_json'])
+
     per_node_gpu = json.loads(row['per_node_gpu_json'])
     segments_layers = json.loads(row['segments_layers_json'])
     segments_detail = json.loads(row['segments_detail_json'])
     segments_summary = json.loads(row['segments_summary_json'])
     total_weights_gb = float(segments_summary.get("total_weights_gb", 0.0))
     total_kv_gb = float(segments_summary.get("total_kv_gb", 0.0))  # 单用户整条链 KV 显存
-
-
     module_count = len(segments_detail)
+
+    link_bw_mean_gbps = 0.0 #均值
+    link_bw_var_gbps = 0.0 #方差
+    if adjacency and bandwidth_gbps_matrix:
+        adj_arr = np.array(adjacency, dtype=int)
+        bw_arr_gbps = np.array(bandwidth_gbps_matrix, dtype=float)
+
+        mask = adj_arr > 0
+        valid = bw_arr_gbps[mask]
+        if valid.size > 0:
+            link_bw_mean_gbps = float(np.mean(valid))
+            link_bw_var_gbps = float(np.var(valid))  # 方差
 
     # 3. 节点资源与成本：computation_capacity / node_costs
     compute_utilization_factor = 0.4  # GPU 利用率比例，可根据需要调整
@@ -199,7 +212,9 @@ def build_test_data_from_row(row):
 
         # 简化分析字段
         "model_size": float(row.get('model_total_params', 0.0)),
-        "bandwidth": float(row.get('link_bandwidth_gbps', 0.0)),  # 仍保留 Gbps 作为高层特征
+        "link_avg_bandwidth": link_bw_mean_gbps,  #链路平均带宽
+        "link_bandwidth_var_gbps": link_bw_var_gbps, #链路带宽方差
+        "network_total_bandwidth_gbps": network_total_bandwidth_gbps, #网络总带宽容量
         "topology_degree": topology_degree,
         "computation_ability": avg_compute_ability,
         "memory_ability": avg_memory_ability,
@@ -215,7 +230,6 @@ def build_test_data_from_row(row):
         "weight_memory_demands": weight_memory_demands,
         "data_sizes": data_sizes,
         "bandwidth_matrix": bandwidth_matrix,
-        "gpu_cost": gpu_cost,
         "memory_cost": memory_cost,
         "bandwidth_cost": bandwidth_cost,
         "profit_per_user": profit_per_user,
@@ -254,7 +268,7 @@ def process_test_case(row):
     print(
         f"参数: profit_per_user={test_data.get('profit_per_user', 0)}, "
         f"module_count={test_data.get('module_count', 0)}, "
-        f"bandwidth={test_data.get('bandwidth', 0)}, "
+        f"link_avg_bandwidth={test_data.get('link_avg_bandwidth', 0)}, "
         f"model_size={test_data.get('model_size', 0)}, "
         f"topology_degree={test_data.get('topology_degree', 0)}, "
         f"memory_cost={test_data.get('memory_cost', 0)}"
@@ -371,8 +385,7 @@ def process_test_case(row):
         'model_size': test_data.get('model_size', 0),
         'module_count': test_data.get('module_count', 0),
         'topology_degree': test_data.get('topology_degree', 0),
-        'bandwidth': test_data.get('bandwidth', 0),
-        'gpu_cost': test_data.get('gpu_cost', 0),
+        'network_total_bandwidth_gbps': test_data.get('network_total_bandwidth_gbps', 0),
         'memory_cost': test_data.get('memory_cost', 0),
         'bandwidth_cost': test_data.get('bandwidth_cost', 0),
         'computation_ability': test_data.get('computation_ability', 0),
@@ -385,9 +398,10 @@ def process_test_case(row):
         'avg_shortest_path_len': avg_shortest_path_len,
         'shortest_path_len_std': shortest_path_len_std,
         'shortest_path_len_max': shortest_path_len_max,
-        'link_bandwidth_mean': link_bandwidth_mean,
+        'link_bandwidth_mean': test_data.get('link_avg_bandwidth', 0),
         'link_bandwidth_min': link_bandwidth_min,
         'link_bandwidth_max': link_bandwidth_max,
+        'link_bandwidth_var':test_data.get('link_bandwidth_var_gbps', 0),
 
         # 新增：模块级资源分布中间变量
         'seg_compute_demand_mean': seg_compute_demand_mean,

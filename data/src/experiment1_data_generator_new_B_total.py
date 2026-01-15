@@ -16,7 +16,7 @@ experiment1_data_generator_new.py
    - 模块边界输出数据量（boundary_data_mb，单位：MB/s/用户，Activation + KV）
 5. 以全排列方式遍历以下维度：
    - 拓扑结构 topology_name
-   - 链路带宽 link_bandwidth_gbps
+   - 网络总带宽 network_total_bandwidth_gbps
    - 链路带宽价格 link_price_per_gbps_month
    - GPU 型号集合 gpu_set
    - GPU 分配策略 map_mode（高连接度配高算力/高连接度配低算力）
@@ -26,6 +26,8 @@ experiment1_data_generator_new.py
      - tokens_per_user: 单个用户的最低输出速率下限（token/sec）
 6. 模型名称 model_name 和 G 组数不参与全排列，你在配置区选定一个即可，想换就改一行。
 7. 支持分批写盘 + 最终合并为一个 CSV。
+8. 适用fat-tree和clos链路带宽不相同架构
+9. 可以配置拓扑条件，调用自动生成拓扑结构，不需要复制邻接矩阵
 
 所有可调参数都在“全局配置区 CONFIG”中，只需改顶部即可，一键运行。
 """
@@ -39,35 +41,44 @@ from typing import List, Dict, Any, Tuple
 import numpy as np
 import pandas as pd
 
+from src.tools.topology_generator_B_total import TopologyGenerator, draw_graph
+
 # ============================================================
 # 一、全局配置区（所有需要手动调的参数都放这里）
 # ============================================================
 
-
 # 1. 输出路径与批次设置
-OUTPUT_DIR = "..\\..\\..\\data\\test_data\\tiny_test"      # 所有输出的根目录
-BATCH_SIZE = 50                       # 每多少条记录写一个批次文件
-FINAL_CSV_NAME = "experiment1_tiny_Llama-3.1-13B_N12_D3_K2-5_KV.csv"  # 合并后的总表名
+OUTPUT_DIR = "..\\test_data\\Correctness_test"      # 所有输出的根目录
+BATCH_SIZE = 5000                       # 每多少条记录写一个批次文件
+FINAL_CSV_NAME = "B_total_K2-5_Fat-tree.csv"  # 合并后的总表名
 
 # 2. 拓扑库（已有拓扑，非随机、可复现）
-#    当前示例：ny20_deg5（12个节点，平均度数约3），可以在这里再加别的拓扑。
+#    当前示例：ny20_deg5（20节点、平均度数约5），可以在这里再加别的拓扑。
 TOPOLOGY_LIBRARY: Dict[str, Dict[str, Any]] = {
-    "mesh12_deg3": {
+    "ny20_deg5": {
         "description": "20-node fixed topology with average degree 5 (from original ny20_topologies)",
         "adjacency": [
-            [0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0],
-            [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0],
-            [0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0],
-            [0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0],
-            [1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0],
-            [0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 0],
-            [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1],
-            [1, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0],
-            [1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1],
-            [0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1],
-            [0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0]
-
+            # 20x20 邻接矩阵（来自你原始程序）
+            [0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [1, 0, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [1, 1, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0],
+            [1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+            [1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0],
+            [0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0],
+            [0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            [0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            [0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            [0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1],
+            [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1],
+            [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1],
+            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1],
+            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1],
+            [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1],
+            [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1],
+            [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1],
+            [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1],
+            [0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]
         ]
     }
 }
@@ -78,25 +89,25 @@ GPU_CATALOG: Dict[str, Dict[str, Any]] = {
         "name": "H200",
         "G_TFLOPS": 1671.0,
         "VRAM_bytes": int(141 * 1024**3),
-        "cost_per_GB_month": 12.51,
+        "cost_per_GB_month": 60.51,
     },
     "H100-SXM": {
         "name": "H100-SXM",
         "G_TFLOPS": 1979.0,
         "VRAM_bytes": int(80 * 1024**3),
-        "cost_per_GB_month": 1.250,
+        "cost_per_GB_month": 40.50,
     },
     "A100-80G": {
         "name": "A100-80G",
         "G_TFLOPS": 312.0,
         "VRAM_bytes": int(80 * 1024**3),
-        "cost_per_GB_month": 0.850,
+        "cost_per_GB_month": 20.50,
     },
     "L4": {
         "name": "L4",
         "G_TFLOPS": 91.0,
         "VRAM_bytes": int(24 * 1024**3),
-        "cost_per_GB_month": 4.20,
+        "cost_per_GB_month": 10.20,
     },
 }
 
@@ -152,36 +163,60 @@ RUN_CONFIG: Dict[str, Any] = {
 
 # 7. 实验组合配置（真正参与全排列的维度）
 GENERATION_CONFIG: Dict[str, Any] = {
-    # （1）拓扑结构：你生成 mesh(12,3) 后放进 TOPOLOGY_LIBRARY，然后写这里
-    "topology_names": ["mesh12_deg3"],
+    # （1）拓扑结构：从已有拓扑库中选择（可以多个）(可选调用生成或者使用现有的）
+    "topology_specs": [
+        #{"type": "clos", "params": {"layer_sizes": [4, 4, 4, 4, 4, 4]}, "seed": 42},
+        #{"type": "clos", "params": {"layer_sizes": [4, 4, 4, 4, 4]}, "seed": 42},
+        #{"type": "clos", "params": {"layer_sizes": [4, 4, 4, 4, 4]}, "seed": 42},
+        #{"type": "clos", "params": {"layer_sizes": [4, 4, 4, 4]}, "seed": 42},
+        #{"type": "clos", "params": {"layer_sizes": [4, 4, 4]}, "seed": 42},
+        #{"type": "clos", "params": {"layer_sizes": [4, 4]}, "seed": 42},
+        {"type": "fat_tree", "params": {"x_hosts_per_leaf": 3, "y_switch_layers": 3, "branching_factor": 2}, "seed": 42},
+        #{"type": "fat_tree", "params": {"x_hosts_per_leaf": 3, "y_switch_layers": 3, "branching_factor": 2}, "seed": 42},
+        #{"type": "random", "params": {"node_count": 20, "edge_prob": 0.10}, "seed": 7},
+        #{"type": "mesh", "params": {"node_count": 20, "min_degree": 4}, "seed": 9},
+    ],
 
-    # （2）模型名称（不参与全排列）
+    #"topology_names": ["ny20_deg5"],
+
+    # （2）模型名称（固定，不参与全排列；想换模型改这里）
     "model_name": "Llama-3.1-13B",
 
-    # （3）聚合组数 G
+    # （3）聚合组数 G（固定，不参与全排列；想换 G 改这里）
     "G": 10,
 
     # （4）切分子模块数 K（参与全排列）
-    "K_list": [2, 3, 4, 5, 6],
+    "K_list": [2, 3, 4, 5],
 
-    # （5）链路带宽（固定一个，减少组合）
-    "link_bandwidth_gbps_list": [100.0],
+    # （5）网络总链路带宽 Gbps（参与全排列）
+    "network_total_bandwidth_gbps_list": [2000.0, 4000.0, 8000.0],
 
-    # （6）链路带宽价格（固定一个）
-    "link_price_per_gbps_month_list": [0.5],
+    # （6）链路带宽价格 $/Gbps/月（参与全排列）
+    "link_price_per_gbps_month_list": [2.0, 8.0],
 
-    # （7）GPU 型号集合（固定一组：A100 + H100）
+    # （7）GPU 型号集合（参与全排列）——每个元素是一个 GPU 型号列表
     "gpu_set_list": [
-        ["A100-80G", "H100-SXM"],
+        ["L4","H100-SXM"], #性能从低到高写
+        #["A100-80G", "H100-SXM"],
+        #["A100-80G"],
     ],
 
-    # （8）GPU 分配策略（参与全排列） → 2 种
+    # （8）GPU 分配策略 map_mode（参与全排列）
+    #     - "high_to_high": 度高 → 分配 gpu_set 中“高档”的显卡
+    #     - "high_to_low":  度高 → 分配 gpu_set 中“低档”的显卡
     "gpu_map_mode_list": ["high_to_high"],
 
-    # （9）用户套餐（固定一个）
+    # （9）用户套餐 profiles（参与全排列）
+    #     每个元素是 {user_price_per_month, tokens_per_user}
+    #     - user_price_per_month: 单个用户月费（单位：$/month）
+    #     - tokens_per_user: 每个用户的最低输出速率下限（单位：token/sec）
     "pricing_profiles": [
-        {"user_price_per_month": 100.0, "tokens_per_user": 20},
+        {"user_price_per_month": 20.0, "tokens_per_user": 20},
+        #{"user_price_per_month": 200.0, "tokens_per_user": 40},
     ],
+
+    "save_topology_png": True,
+    "topology_png_dir": os.path.join(OUTPUT_DIR, "topology_png"),
 }
 
 # ============================================================
@@ -194,6 +229,94 @@ def get_adjacency_matrix(topology_name: str) -> np.ndarray:
     adj = np.array(topo["adjacency"], dtype=int)
     return adj
 
+def build_topology_from_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    由 topology_specs 生成拓扑实例，返回：
+    {
+      "name": topo_name,
+      "type": topo_type,
+      "adj": np.ndarray,
+      "topo_meta": Dict,
+      "G": nx.Graph,
+      "pos": dict or None,
+      "spec_json": str
+    }
+    """
+    topo_type = spec["type"].lower()
+    params = spec.get("params", {})
+    seed = int(spec.get("seed", 42))
+
+    topo_cfg = {
+        "topology_type": topo_type,
+        "output_dir": "unused",
+        "random_seed": seed,
+        "fat_tree": {
+            "x_hosts_per_leaf": int(params.get("x_hosts_per_leaf", 3)),
+            "y_switch_layers": int(params.get("y_switch_layers", 3)),
+            "branching_factor": int(params.get("branching_factor", 2)),
+        },
+        "clos": {
+            "layer_sizes": params.get("layer_sizes", [4, 8, 8, 4]),
+        },
+        "random": {
+            "node_count": int(params.get("node_count", 20)),
+            "edge_prob": float(params.get("edge_prob", 0.1)),
+        },
+        "mesh": {
+            "node_count": int(params.get("node_count", 20)),
+            "min_degree": int(params.get("min_degree", 4)),
+        },
+    }
+
+    gen = TopologyGenerator(topo_cfg)
+    G, adjacency_list, topo_name, pos, topo_meta = gen.generate()
+
+    adj = np.array(adjacency_list, dtype=int)
+
+    # random/mesh 希望用普通 spring 图：画图时传 pos=None 即可
+    if topo_type in ("random", "mesh"):
+        pos_to_draw = None
+    else:
+        pos_to_draw = pos
+
+    return {
+        "name": topo_name,
+        "type": topo_type,
+        "adj": adj,
+        "topo_meta": topo_meta,
+        "G": G,
+        "pos": pos_to_draw,
+        "spec_json": json.dumps(spec, ensure_ascii=False),
+    }
+
+
+def build_all_topology_instances() -> List[Dict[str, Any]]:
+    """
+    合并两种来源：
+    - 静态库 topology_names（兼容）
+    - 动态生成 topology_specs（推荐）
+    """
+    instances: List[Dict[str, Any]] = []
+
+    # A) 静态库
+    for name in GENERATION_CONFIG.get("topology_names", []):
+        topo = TOPOLOGY_LIBRARY[name]
+        adj = np.array(topo["adjacency"], dtype=int)
+        instances.append({
+            "name": name,
+            "type": "library",
+            "adj": adj,
+            "topo_meta": {"topology_type": "library", "layers": [], "edge_tiers": {}},
+            "G": None,
+            "pos": None,
+            "spec_json": json.dumps({"type": "library", "name": name}, ensure_ascii=False),
+        })
+
+    # B) 动态生成
+    for spec in GENERATION_CONFIG.get("topology_specs", []):
+        instances.append(build_topology_from_spec(spec))
+
+    return instances
 
 def compute_distance_matrix(adj: np.ndarray) -> np.ndarray:
     """
@@ -218,19 +341,54 @@ def compute_distance_matrix(adj: np.ndarray) -> np.ndarray:
     return dist
 
 
-def compute_bandwidth_matrix(adj: np.ndarray, link_bandwidth_gbps: float) -> np.ndarray:
+def compute_bandwidth_matrix_total(
+    adj: np.ndarray,
+    topo_meta: Dict[str, Any],
+    network_total_bandwidth_gbps: float
+) -> np.ndarray:
     """
-    根据邻接矩阵生成带宽矩阵：
-    - 有边的位置 = link_bandwidth_gbps
-    - 无边的位置 = 0
+    基于“网络总带宽预算 B_total”生成带宽矩阵 bw：
+
+    - fat-tree / clos：
+        将 B_total 在 tier 间均分（每个 tier 的总带宽相同），tier 内均分到每条边
+    - mesh / random / library：
+        将 B_total 在全网所有边上均分（每条边带宽相同）
+
+    返回：
+        bw[i,j] = i-j 边的带宽（Gbps），无边为 0
     """
     n = adj.shape[0]
     bw = np.zeros((n, n), dtype=float)
-    for i in range(n):
-        for j in range(n):
-            if adj[i, j] == 1:
-                bw[i, j] = link_bandwidth_gbps
+
+    topo_type = topo_meta.get("topology_type", "").lower()
+    edge_tiers = topo_meta.get("edge_tiers", {}) or {}
+
+    # 1) 分层拓扑：fat-tree / clos
+    if topo_type in ("fat_tree", "clos") and len(edge_tiers) > 0:
+        T = len(edge_tiers)
+        per_tier_total = float(network_total_bandwidth_gbps) / float(T)
+
+        for tier_name, edges in edge_tiers.items():
+            if not edges:
+                continue
+            per_link = per_tier_total / float(len(edges))
+            for (u, v) in edges:
+                bw[u, v] = per_link
+                bw[v, u] = per_link
+        return bw
+
+    # 2) 非分层：均分到每条边
+    m2 = int(adj.sum())  # 无向图会把每条边计两次
+    if m2 <= 0:
+        return bw
+    m = m2 / 2.0
+    per_link = float(network_total_bandwidth_gbps) / float(m)
+
+    idx = np.where(adj == 1)
+    for i, j in zip(idx[0], idx[1]):
+        bw[i, j] = per_link
     return bw
+
 
 
 def assign_gpus_by_degree(
@@ -424,9 +582,9 @@ def estimate_partition_resources(
 
         # 3.3 KV 显存（驻留）：每层 KV 保存 seq_len × batch_size 的上下文
         kv_bytes_i = kv_bytes_per_token_per_layer * seq_len * batch_size * li
-        kv_gb_i = kv_bytes_i / (1024**3)
+        kv_gb_batch = kv_bytes_i / (1024 ** 3)
+        kv_gb_per_user = kv_gb_batch / batch_size  # 这里 batch_size>0（你配置里是正数）
 
-        memory_gb = weights_gb_i + kv_gb_i
 
         # 3.4 边界数据量（Activation + KV），只对 i < K-1 的边界有意义
         if i < K - 1:
@@ -449,21 +607,15 @@ def estimate_partition_resources(
             "layers": li,
             "compute_tflops_per_token": float(round(compute_tflops_per_token, 6)),
             "compute_tflops_per_user_per_sec": float(round(compute_tflops_per_token * tokens_per_user, 6)),
-            "memory_gb": float(round(memory_gb, 6)),
-
-             # - weights_gb：该段模型权重显存（一次加载，多链复用）
-            # - kv_gb：该段单用户的 KV 显存（per user，后面按 users 线性放大）
-            "weights_gb": float(round(weights_gb_i, 6)),
-            "kv_gb": float(round(kv_gb_i, 6)),  #per user 的 KV 显存
-
+            "weights_gb": float(round(weights_gb_i, 6)),       # 常量
+            "kv_gb": float(round(kv_gb_per_user, 6)),          # per-user KV
             # 含义：单用户在该边界的流量速率（MB/s）
             "boundary_data_mb": float(round(boundary_mb, 6)),
         })
 
     summary = {
         "total_compute_tflops_per_token": float(round(sum(s["compute_tflops_per_token"] for s in segments), 6)),
-        "total_memory_gb": float(round(sum(s["memory_gb"] for s in segments), 6)),
-        "total_weights_gb": float(round(sum(s["weights_gb"] for s in segments), 6)),
+        "total_weights_gb": float(round(sum(s["weights_gb"] for s in segments), 6)),  # 常量（整链一份）
         "total_kv_gb": float(round(sum(s["kv_gb"] for s in segments), 6)),
         "max_boundary_data_mb": float(round(max(s["boundary_data_mb"] for s in segments), 6)),
     }
@@ -510,22 +662,35 @@ def generate_experiment_data() -> None:
     buffer: List[Dict[str, Any]] = []
     batch_idx = 0
 
-    topology_names = GENERATION_CONFIG["topology_names"]
+    topology_instances = build_all_topology_instances()
+
     model_name = GENERATION_CONFIG["model_name"]
     G = GENERATION_CONFIG["G"]
     K_list = GENERATION_CONFIG["K_list"]
-    link_bw_list = GENERATION_CONFIG["link_bandwidth_gbps_list"]
+
+    net_bw_total_list = GENERATION_CONFIG["network_total_bandwidth_gbps_list"]
     link_price_list = GENERATION_CONFIG["link_price_per_gbps_month_list"]
+
     gpu_set_list = GENERATION_CONFIG["gpu_set_list"]
     gpu_map_mode_list = GENERATION_CONFIG["gpu_map_mode_list"]
     pricing_profiles = GENERATION_CONFIG["pricing_profiles"]
 
     rank_order = GPU_ASSIGNMENT_CONFIG["rank_order"]
 
+    if GENERATION_CONFIG.get("save_topology_png", False):
+        png_dir = GENERATION_CONFIG.get("topology_png_dir", os.path.join(OUTPUT_DIR, "topology_png"))
+        ensure_dir(png_dir)
+
+        for topo in topology_instances:
+            if topo["G"] is None:
+                continue
+            img_path = os.path.join(png_dir, f"{topo['name']}.png")
+            draw_graph(topo["G"], img_path, pos=topo["pos"], title=topo["name"])
+
     total_combos = (
-        len(topology_names)
+        len(topology_instances)
         * len(K_list)
-        * len(link_bw_list)
+        * len(net_bw_total_list)
         * len(link_price_list)
         * len(gpu_set_list)
         * len(gpu_map_mode_list)
@@ -541,18 +706,27 @@ def generate_experiment_data() -> None:
     if G > L:
         raise RuntimeError(f"G={G} 不能大于模型 {model_name} 的总层数 L={L}")
 
-    for topo_name, K, link_bw, link_price, gpu_set, map_mode, pricing in itertools.product(
-        topology_names, K_list, link_bw_list, link_price_list, gpu_set_list, gpu_map_mode_list, pricing_profiles
+    for topo, K, net_bw_total, link_price, gpu_set, map_mode, pricing in itertools.product(
+            topology_instances,
+            K_list,
+            net_bw_total_list,
+            link_price_list,
+            gpu_set_list,
+            gpu_map_mode_list,
+            pricing_profiles,
     ):
+        topo_name = topo["name"]
         if K > G:
             print(f"[跳过] 拓扑={topo_name}, K={K} > G={G}")
             continue
 
         # 拿拓扑
-        adj = get_adjacency_matrix(topo_name)
+
+        adj = topo["adj"]
         n_nodes = adj.shape[0]
+
         dist = compute_distance_matrix(adj)
-        bw_mat = compute_bandwidth_matrix(adj, link_bw)
+        bw_mat = compute_bandwidth_matrix_total(adj, topo["topo_meta"], net_bw_total)
 
         # GPU 分配
         per_node_gpu = assign_gpus_by_degree(adj, gpu_set, rank_order, map_mode)
@@ -580,8 +754,11 @@ def generate_experiment_data() -> None:
                 "partition_index": part_idx,
 
                 # 网络参数
-                "link_bandwidth_gbps": link_bw,
+                "network_total_bandwidth_gbps": net_bw_total,
                 "link_price_per_gbps_month": link_price,
+                "network_bandwidth_cost_per_month": net_bw_total * link_price,
+                "topology_type": topo["type"],
+                "topology_spec_json": topo["spec_json"],
 
                 # GPU 分配策略参数
                 "gpu_set": ",".join(gpu_set),

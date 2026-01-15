@@ -25,6 +25,7 @@ from typing import List, Dict, Tuple
 
 import networkx as nx
 import matplotlib.pyplot as plt
+from typing import List
 
 
 # ==========================
@@ -33,7 +34,7 @@ import matplotlib.pyplot as plt
 
 CONFIG = {
     # 拓扑类型: "fat_tree" | "clos" | "random" | "mesh"
-    "topology_type": "mesh",
+    "topology_type": "clos",
 
     # 输出目录（相对于本脚本所在目录）
     "output_dir": "topology_output",
@@ -43,7 +44,7 @@ CONFIG = {
 
     # ---- fat-tree 参数 ----
     "fat_tree": {
-        "x_hosts_per_leaf": 2,     # 每个叶子交换机下挂的 host 数量
+        "x_hosts_per_leaf": 3,     # 每个叶子交换机下挂的 host 数量
         "y_switch_layers": 3,      # 交换机层数（不含 host 层）
         "branching_factor": 2      # 每下一层交换机数量 = 上一层 * branching_factor
     },
@@ -51,7 +52,7 @@ CONFIG = {
     # ---- CLOS 参数 ----
     "clos": {
         # 每层的节点数，例如 [4, 8, 8, 4]
-        "layer_sizes": [4, 8, 8, 4]
+        "layer_sizes": [4, 4, 4, 4, 4, 4]
     },
 
     # ---- 随机网络参数 ----
@@ -94,14 +95,15 @@ def graph_to_adjacency_matrix(G: nx.Graph) -> List[List[int]]:
     return mat
 
 
-def save_adjacency_matrix(
-    adjacency: List[List[int]], filepath: str
-) -> None:
-    """将邻接矩阵保存为 txt 文件（0/1，空格分隔）"""
+def save_adjacency_matrix(adjacency: List[List[int]], filepath: str) -> None:
+    """将邻接矩阵保存为 Python 列表字面量（list of lists）"""
     with open(filepath, "w", encoding="utf-8") as f:
-        for row in adjacency:
-            line = " ".join(str(x) for x in row)
-            f.write(line + "\n")
+        f.write("[\n")
+        for i, row in enumerate(adjacency):
+            row_str = ", ".join(str(x) for x in row)
+            comma = "," if i != len(adjacency) - 1 else ""
+            f.write(f"    [{row_str}]{comma}\n")
+        f.write("]\n")
 
 
 def draw_graph(
@@ -140,32 +142,51 @@ class TopologyGenerator:
             random.seed(seed)
 
     # ---- 总入口 ----
-    def generate(self) -> Tuple[nx.Graph, List[List[int]], str]:
-        ttype = self.config.get("topology_type", "fat_tree")
-        ttype = ttype.lower()
+    def generate(self) -> Tuple[nx.Graph, List[List[int]], str, Dict[int, Tuple[float, float]], Dict[str, any]]:
+        """
+        返回：
+        - G: networkx 图
+        - adjacency: 0/1 邻接矩阵（list[list[int]]）
+        - name: 拓扑名
+        - pos: 绘图坐标（fat-tree/clos 为分层坐标；random/mesh 可为 spring）
+        - topo_meta: 拓扑元信息（用于分层带宽分配等）
+            {
+              "topology_type": str,
+              "layers": List[List[int]],
+              "edge_tiers": Dict[str, List[Tuple[int,int]]]
+            }
+        """
+        ttype = self.config.get("topology_type", "fat_tree").lower()
 
         if ttype == "fat_tree":
-            G, name, pos = self._generate_fat_tree()
+            G, name, pos, topo_meta = self._generate_fat_tree()
         elif ttype == "clos":
-            G, name, pos = self._generate_clos()
+            G, name, pos, topo_meta = self._generate_clos()
         elif ttype == "random":
             G, name, pos = self._generate_random()
+            topo_meta = {"topology_type": "random", "layers": [], "edge_tiers": {}}
         elif ttype == "mesh":
             G, name, pos = self._generate_mesh()
+            topo_meta = {"topology_type": "mesh", "layers": [], "edge_tiers": {}}
         else:
             raise ValueError(f"未知拓扑类型: {ttype}")
 
         adjacency = graph_to_adjacency_matrix(G)
-        return G, adjacency, name
+        return G, adjacency, name, pos, topo_meta
+
 
     # ---- 1. fat-tree ----
-    def _generate_fat_tree(self) -> Tuple[nx.Graph, str, Dict[int, Tuple[float, float]]]:
+    def _generate_fat_tree(self) -> Tuple[nx.Graph, str, Dict[int, Tuple[float, float]], Dict[str, any]]:
         """
-        生成一个简化的 fat-tree 风格拓扑：
-        - y 层交换机（0:核心层 ... y-1:叶子交换机层）
-        - 每层交换机数量依次乘以 branching_factor
-        - 每层之间全连接
-        - 每个叶子交换机接 x_hosts_per_leaf 个 host
+        简化 fat-tree 风格拓扑（你现有实现）：
+        - y 层交换机（0:核心层 ... y-1:叶子层）
+        - 层间全连接
+        - 每个叶子层节点接 x_hosts_per_leaf 个 host
+
+        这里新增：
+        - layers: [switch_layer0, ..., switch_layer(y-1), host_layer]
+        - edge_tiers:
+            tier_sw_0_1, tier_sw_1_2, ..., tier_sw_(y-2)_(y-1), tier_leaf_host
         """
         params = self.config["fat_tree"]
         x_hosts_per_leaf = int(params["x_hosts_per_leaf"])
@@ -173,98 +194,122 @@ class TopologyGenerator:
         branching_factor = int(params["branching_factor"])
 
         G = nx.Graph()
-
         switch_layers: List[List[int]] = []
-        current_node_id = 0
+        edge_tiers: Dict[str, List[Tuple[int, int]]] = {}
 
-        # 生成交换机层：从核心层到叶子层
+        current_node_id = 0
         num_switches = 1
+
+        # 生成交换机层
         for layer in range(y_layers):
             layer_nodes = list(range(current_node_id, current_node_id + num_switches))
-            current_node_id += num_switches
             switch_layers.append(layer_nodes)
+            G.add_nodes_from(layer_nodes)
+            current_node_id += num_switches
             num_switches *= branching_factor
 
-        # 在交换机层之间建立全连接
+        # 层间全连接，并记录 tier
         for layer in range(y_layers - 1):
-            upper = switch_layers[layer]
-            lower = switch_layers[layer + 1]
-            for u in upper:
-                for v in lower:
+            tier_name = f"tier_sw_{layer}_{layer+1}"
+            edge_tiers[tier_name] = []
+            for u in switch_layers[layer]:
+                for v in switch_layers[layer + 1]:
                     G.add_edge(u, v)
+                    a, b = (u, v) if u < v else (v, u)
+                    edge_tiers[tier_name].append((a, b))
 
-        # 叶子层挂 host
-        leaf_switches = switch_layers[-1]
+        # 生成 host，并连接叶子层
         host_nodes: List[int] = []
-        for sw in leaf_switches:
+        edge_tiers["tier_leaf_host"] = []
+
+        leaf_switches = switch_layers[-1]
+        for leaf in leaf_switches:
             for _ in range(x_hosts_per_leaf):
-                host = current_node_id
+                host_id = current_node_id
                 current_node_id += 1
-                G.add_edge(sw, host)
-                host_nodes.append(host)
+                host_nodes.append(host_id)
+                G.add_node(host_id)
+                G.add_edge(leaf, host_id)
 
-        total_nodes = G.number_of_nodes()
-        name = f"fat_tree_y{y_layers}_x{x_hosts_per_leaf}_bf{branching_factor}_N{total_nodes}"
+                a, b = (leaf, host_id) if leaf < host_id else (host_id, leaf)
+                edge_tiers["tier_leaf_host"].append((a, b))
 
-        # 简单分层布局：按 layer 排纵坐标
+        # 分层坐标（你原本的分层 pos 逻辑）
         pos: Dict[int, Tuple[float, float]] = {}
-        # 交换机层
-        for layer_idx, nodes in enumerate(switch_layers):
-            n = len(nodes)
-            for i, node in enumerate(sorted(nodes)):
-                x = (i - (n - 1) / 2)  # 居中
-                y = -layer_idx
-                pos[node] = (x, y)
-        # host 放在最下面一层
-        host_y = -(y_layers + 1)
-        n_hosts = len(host_nodes)
-        for i, node in enumerate(sorted(host_nodes)):
-            x = (i - (n_hosts - 1) / 2)
-            pos[node] = (x, host_y)
+        y_gap = 1.5
+        for layer_idx, layer_nodes in enumerate(switch_layers):
+            y = (y_layers - 1 - layer_idx) * y_gap
+            x_gap = 1.0
+            for j, node in enumerate(layer_nodes):
+                pos[node] = (j * x_gap, y)
 
-        return G, name, pos
+        # host 放在最底层
+        host_y = -1.0 * y_gap
+        for j, node in enumerate(host_nodes):
+            pos[node] = (j * 0.4, host_y)
+
+        name = f"fat_tree_x{x_hosts_per_leaf}_y{y_layers}_bf{branching_factor}"
+
+        topo_meta = {
+            "topology_type": "fat_tree",
+            "layers": switch_layers + [host_nodes],
+            "edge_tiers": edge_tiers,
+        }
+        return G, name, pos, topo_meta
 
     # ---- 2. CLOS 架构 ----
-    def _generate_clos(self) -> Tuple[nx.Graph, str, Dict[int, Tuple[float, float]]]:
+    def _generate_clos(self) -> Tuple[nx.Graph, str, Dict[int, Tuple[float, float]], Dict[str, any]]:
         """
-        生成 CLOS 架构：
-        - layer_sizes = [n0, n1, ..., n_{L-1}]
-        - 相邻层之间全连接
+        CLOS 架构：
+        - 多层，每层节点数由 layer_sizes 指定
+        - 相邻层全连接
+
+        新增：
+        - layers: 每层节点列表
+        - edge_tiers: tier_0_1, tier_1_2, ...
         """
-        params = self.config["clos"]
-        layer_sizes: List[int] = list(params["layer_sizes"])
+        layer_sizes = self.config["clos"]["layer_sizes"]
+        layer_sizes = [int(x) for x in layer_sizes]
+        L = len(layer_sizes)
 
         G = nx.Graph()
         layers: List[List[int]] = []
+        edge_tiers: Dict[str, List[Tuple[int, int]]] = {}
 
         current_node_id = 0
-        for layer_idx, size in enumerate(layer_sizes):
-            nodes = list(range(current_node_id, current_node_id + int(size)))
-            current_node_id += int(size)
-            layers.append(nodes)
+        for i, sz in enumerate(layer_sizes):
+            layer_nodes = list(range(current_node_id, current_node_id + sz))
+            layers.append(layer_nodes)
+            G.add_nodes_from(layer_nodes)
+            current_node_id += sz
 
-        # 相邻层全连接
-        L = len(layers)
-        for layer_idx in range(L - 1):
-            upper = layers[layer_idx]
-            lower = layers[layer_idx + 1]
-            for u in upper:
-                for v in lower:
+        # 相邻层全连接，并记录 tier
+        for i in range(L - 1):
+            tier_name = f"tier_{i}_{i+1}"
+            edge_tiers[tier_name] = []
+            for u in layers[i]:
+                for v in layers[i + 1]:
                     G.add_edge(u, v)
+                    a, b = (u, v) if u < v else (v, u)
+                    edge_tiers[tier_name].append((a, b))
 
-        total_nodes = G.number_of_nodes()
-        name = "clos_" + "-".join(str(s) for s in layer_sizes) + f"_N{total_nodes}"
-
-        # 简单分层布局
+        # 分层坐标
         pos: Dict[int, Tuple[float, float]] = {}
-        for layer_idx, nodes in enumerate(layers):
-            n = len(nodes)
-            for i, node in enumerate(sorted(nodes)):
-                x = (i - (n - 1) / 2)
-                y = -layer_idx
-                pos[node] = (x, y)
+        y_gap = 1.5
+        for i, layer_nodes in enumerate(layers):
+            y = (L - 1 - i) * y_gap
+            x_gap = 1.0
+            for j, node in enumerate(layer_nodes):
+                pos[node] = (j * x_gap, y)
 
-        return G, name, pos
+        name = "clos_" + "_".join(map(str, layer_sizes))
+
+        topo_meta = {
+            "topology_type": "clos",
+            "layers": layers,
+            "edge_tiers": edge_tiers,
+        }
+        return G, name, pos, topo_meta
 
     # ---- 3. 随机网络 ----
     def _generate_random(self) -> Tuple[nx.Graph, str, Dict[int, Tuple[float, float]]]:
@@ -360,36 +405,31 @@ class TopologyGenerator:
 # 主函数
 # ==========================
 
+# --- main() ---
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     output_dir = os.path.join(script_dir, CONFIG["output_dir"])
     ensure_dir(output_dir)
 
     gen = TopologyGenerator(CONFIG)
-    G, adjacency, topo_name = gen.generate()
+    G, adjacency, topo_name, pos, topo_meta = gen.generate()
 
     print(f"生成拓扑: {topo_name}")
     print(f"节点数: {G.number_of_nodes()}, 边数: {G.number_of_edges()}")
 
-    # 保存邻接矩阵
     adj_path = os.path.join(output_dir, f"{topo_name}_adjacency.txt")
     save_adjacency_matrix(adjacency, adj_path)
     print(f"邻接矩阵已保存到: {adj_path}")
 
-    # 保存拓扑图
     img_path = os.path.join(output_dir, f"{topo_name}_topology.png")
 
-    # 对 fat-tree / CLOS 使用自带 pos，其它用 spring_layout
     topology_type = CONFIG["topology_type"].lower()
-    if topology_type in ("fat_tree", "clos"):
-        # 上面生成函数已经返回了 pos，这里为了简单再算一次布局也可，
-        # 但我们直接用 spring_layout 也没问题。
-        pos = None
-    else:
-        pos = None
+    if topology_type in ("random", "mesh"):
+        pos = None  # 保持 random/mesh 为普通图（spring）
 
     draw_graph(G, img_path, pos=pos, title=topo_name)
     print(f"拓扑图已保存到: {img_path}")
+
 
 
 if __name__ == "__main__":

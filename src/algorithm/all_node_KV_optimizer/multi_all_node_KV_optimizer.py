@@ -485,6 +485,14 @@ class MultiFunctionOptimizer:
 
         deployment = [-1] * m
 
+        # ---------------------------
+        # 本条链的临时累计状态（用于同节点多模块累计约束）
+        # ---------------------------
+        temp_comp_on_node = [0.0] * n  # TFLOPs/s per user（累计）
+        temp_kv_on_node = [0.0] * n  # GB per user（累计）
+        temp_new_weight_on_node = [0.0] * n  # GB（累计新增权重）
+        temp_loaded_modules = [set(s) for s in self.modules_loaded_per_node]  # 全局已加载 + 本链新增
+
         # 逐模块贪心
         for module_idx in range(m):
             best_candidate = None  # (score_tuple, node, users_local, cost_local, profit_local)
@@ -498,26 +506,30 @@ class MultiFunctionOptimizer:
                 if comp_demand > 0 and comp_cap <= 0:
                     continue
 
-                # 判断权重是否为新增
-                is_new_weight = (module_idx not in self.modules_loaded_per_node[node])
+                # 判断本模块权重是否为“新增加载”（同时考虑全局已加载 + 本链已选）
+                is_new_weight = (module_idx not in temp_loaded_modules[node])
                 static_weight_add = weight_mem if is_new_weight else 0.0
 
-                # 显存：至少要放下新增权重
-                if static_weight_add > mem_cap + 1e-9:
+                comp_use = temp_comp_on_node[node] + comp_demand
+                kv_use = temp_kv_on_node[node] + kv_demand
+                new_weight = temp_new_weight_on_node[node] + static_weight_add
+
+                # 新增权重叠加后放不下：直接不可行
+                if new_weight > mem_cap + 1e-9:
                     continue
 
-                # 基于当前模块本身的节点限制
+                # 计算资源上限（对“本节点承载该链的累计模块”）
                 comp_limit = float("inf")
                 mem_limit = float("inf")
 
-                if comp_demand > 0:
-                    comp_limit = comp_cap / comp_demand
+                if comp_use > 0:
+                    comp_limit = comp_cap / comp_use
 
-                if kv_demand > 0:
-                    avail_mem = mem_cap - static_weight_add
+                if kv_use > 0:
+                    avail_mem = mem_cap - new_weight
                     if avail_mem <= 0:
                         continue
-                    mem_limit = avail_mem / kv_demand
+                    mem_limit = avail_mem / kv_use
 
                 # 链路限制：考虑与上一个模块之间的带宽
                 link_limit = float("inf")
@@ -631,6 +643,18 @@ class MultiFunctionOptimizer:
 
             _, chosen_node, users_local, local_cost, local_profit = best_candidate
             deployment[module_idx] = chosen_node
+
+            is_new_weight = (module_idx not in temp_loaded_modules[chosen_node])
+
+            # ---- 更新本链临时累计状态（用于后续模块同节点判定） ----
+            # compute / kv 始终累计（不论权重是否新增）
+            temp_comp_on_node[chosen_node] += comp_demand
+            temp_kv_on_node[chosen_node] += kv_demand
+
+            # 权重只在“新增加载”时累计
+            if is_new_weight:
+                temp_new_weight_on_node[chosen_node] += weight_mem
+                temp_loaded_modules[chosen_node].add(module_idx)
 
             if self.test_data_id <= 3:
                 print(
